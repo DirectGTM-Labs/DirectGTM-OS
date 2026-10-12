@@ -1,0 +1,68 @@
+name: DirectGTM CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: directgtm-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  content-checks:
+    name: Content checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install CI dependencies
+        run: python -m pip install -r .github/requirements-ci.txt
+      - name: Check published entry points and changed content
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python .github/scripts/check_content.py
+
+  sql-proof:
+    name: S01 SQL proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: directgtm_ci
+          POSTGRES_DB: directgtm_ci
+          # Disposable synthetic-data CI database; this is not a production secret.
+          POSTGRES_PASSWORD: directgtm_ci_ephemeral
+        options: >-
+          --health-cmd "pg_isready -U directgtm_ci -d directgtm_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Reproduce the recorded S01 query outputs
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: python .github/scripts/check_s01.py
